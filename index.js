@@ -521,13 +521,14 @@ async function updateBookmarkRestrict(
   }
 }
 
-async function clearBookmarkTags(works) {
+async function clearBookmarkTags(works, force=false) {
   if (!works?.length) {
     return alert(
-      `没有获取到收藏夹内容，操作中断，请检查选项下是否有作品\nFetching bookmark information failed. Abort operation. Please check the existence of works with the configuration`
+      `没有获取到收藏夹内容，操作中断，请检查选项下是否有作品\nFetching bookmark information failed. Abort operation. Please check the existence of works with the configuration (2)`
     );
   }
   if (
+    !force && 
     !window.confirm(
       `确定要删除所选作品的标签吗？（作品的收藏状态不会改变）\nThe tags of work(s) you've selected will be removed (become uncategorized). Is this okay?`
     )
@@ -682,6 +683,76 @@ async function handleDeleteTag(evt) {
   evt.preventDefault();
   const { tag, restrict } = await updateWorkInfo();
   await deleteTag(tag, restrict ? "hide" : "show");
+}
+
+async function handleClearAllBookmarkTags(evt) {
+  evt.preventDefault();
+
+  const tagToQuery = document.querySelector("#label_tag_query").value;
+  const publicationType = (await updateWorkInfo())["restrict"]
+    ? "hide"
+    : "show";
+  let exclusion = document
+    .querySelector("#label_exclusion")
+    .value.split(/[\s\n]/)
+    .filter((t) => t);
+  exclusion = new Set(exclusion);
+
+  console.log("Clear All Bookmark Tags Configuration:");
+  console.log(
+    `tagToQuery: ${tagToQuery}; publicationType: ${publicationType}; exclusion: ${exclusion.join(",")}`
+  );
+
+  if (
+    !window.confirm(
+      `All tags will be removed but works will keep bookmarked. Is this okay?`
+    )
+  )
+    return;
+
+  const userTagsSet = new Set(userTags);
+
+  window.runFlag = true;
+  const promptBottom = document.querySelector("#label_prompt");
+  promptBottom.innerText =
+    "处理中，请勿关闭窗口\nProcessing. Please do not close the window.";
+  const objDiv = document.querySelector("#label_form");
+  objDiv.scrollTop = objDiv.scrollHeight;
+
+  // fetch bookmarks
+  let total, // total bookmarks of specific tag
+    index = 0; // counter of do-while loop
+  let allWorks = [];
+  do {
+    const bookmarks = await fetchBookmarks(
+      uid,
+      tagToQuery,
+      index,
+      publicationType
+    );
+    if (!total) total = bookmarks.total;
+    const works = bookmarks["works"]
+    .map((work) => {
+      if (work.title === "-----") return null;
+      work.bookmarkId = work["bookmarkData"]["id"];
+      work.associatedTags = bookmarks["bookmarkTags"][work.bookmarkId] 
+        || []; //work.tags.filter((tag) => userTagsSet.has(tag));
+      work.associatedTags = work.associatedTags.filter(
+        (tag) => !exclusion.has(tag) && tag != "未分類"
+      );
+      return work;
+    })
+    .filter((work) => work && work.associatedTags.length);
+    allWorks = allWorks.concat(works);
+    index += bookmarks["works"].length;
+  } while (index < total);
+  if (DEBUG) console.log("Bookmarks", allWorks);
+  const ret = await clearBookmarkTags(allWorks, true);
+  window.runFlag = false;
+  promptBottom.innerText = `
+  Cleared tags. Please close the window and refresh.
+  `;
+  return ret;
 }
 
 async function handleLabel(evt) {
@@ -1764,6 +1835,9 @@ function createModalElements() {
         </button>
         <button type="button" class="btn btn-outline-primary me-3"
           onclick="window.location.reload();">刷新 / Refresh</button>
+        <button type="button" class="btn btn-outline-danger me-3" style="white-space: nowrap"
+          id="footer_clear_button">Clear Tags
+        </button>
         <button type="button" class="btn btn-outline-primary" style="white-space: nowrap"
           id="footer_label_button">开始 / Start
         </button>
@@ -3515,6 +3589,8 @@ function setElementProperties() {
   footerLabel.onclick = () => startLabel.click();
   const stopButton = document.querySelector("#footer_stop_button");
   stopButton.onclick = () => (window.runFlag = false);
+  const footerClear = document.querySelector("#footer_clear_button");
+  footerClear.onclick = handleClearAllBookmarkTags;
 
   // default value
   const addFirst = document.querySelector("#label_add_first");
